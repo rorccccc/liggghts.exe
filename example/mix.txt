@@ -1,0 +1,115 @@
+# 搅拌模拟
+atom_style	granular				# 颗粒模拟
+boundary	f p f					# 固定边界
+units		si						# 单位
+communicate	single vel yes			# 通讯模式
+newton		off						# 牛顿第三定律
+
+# 定义计算域
+variable xmin equal -0.12
+variable xmax equal  0.12
+variable ymin equal -0.12
+variable ymax equal  0.12
+variable zmin equal -0.06
+variable zmax equal  0.06
+
+# 定义时间步长
+variable	dt equal 1e-5
+
+# 模拟变量
+variable	natoms equal 2		# 1定义为颗粒，2定义为几何体
+
+# 杨氏模量
+variable	youngmodulus1 equal 1e7
+variable	youngmodulus2 equal 1e7
+
+# 泊松比
+variable	poission1 equal 0.25
+variable	poission2 equal 0.25
+
+# 恢复系数
+variable	CoR11 equal 0.15
+variable	CoR12 equal 0.5
+variable	CoR21 equal 0.5
+variable	CoR22 equal 0.5
+
+# 滑动摩擦系数
+variable	sf11 equal 1.04
+variable	sf12 equal 0.7
+variable	sf21 equal 0.7
+variable	sf22 equal 0.0
+
+# 滚动摩擦系数
+variable	rf11 equal 0.05
+variable	rf12 equal 0.15
+variable	rf21 equal 0.15
+variable	rf22 equal 0.15
+
+# 颗粒设置
+variable	nradii 	equal 1							# 分布1
+variable	radius	equal	0.003	#m			# 半径
+variable	frac	equal	1		#15%				# 分布2
+variable	density	equal	2400	#kg/m³	# 密度
+
+# 生成颗粒参数设置
+variable	filltime	equal	1
+variable	fillsteps	equal	${filltime}/${dt}
+
+# 旋转运动参数设置
+variable	rotatime	equal	6
+variable	rotasteps	equal	${rotatime}/${dt}
+
+# 搅拌叶片转速
+variable	drumPeriod	equal	1	#1rps
+
+# 定义仿真计算域
+region		reg block ${xmin} ${xmax} ${ymin} ${ymax} ${zmin} ${zmax} units box
+create_box	2 reg
+neighbor	0.004 bin		#default
+neigh_modify	delay 0		#default
+
+# 定义接触模型
+pair_style gran model hertz tangential history rolling_friction epsd2	#contact model
+pair_coeff	* *
+timestep	${dt}
+
+# 定义积分器
+fix	integrator all nve/sphere
+
+# 设置重力
+fix	gravi all gravity 9.81 vector 0.0 0.0 1.0
+
+# 定义材料参数
+fix	m1 all property/global youngsModulus peratomtype ${youngmodulus1} ${youngmodulus2}
+fix	m2 all property/global poissonsRatio peratomtype ${poission1} ${poission2}
+fix	m3 all property/global coefficientRestitution peratomtypepair ${natoms} ${CoR11} ${CoR12} ${CoR21} ${CoR22}
+fix	m4 all property/global coefficientFriction peratomtypepair ${natoms} ${sf11} ${sf12} ${sf21} ${sf22}
+fix	m5 all property/global coefficientRollingFriction peratomtypepair ${natoms} ${rf11} ${rf12} ${rf21} ${rf22}
+
+# 加载模型文件
+fix	Wall all mesh/surface/stress file meshes/wall.stl type 2 scale 0.001
+fix	Blade all mesh/surface/stress file meshes/blade.stl type 2 scale 0.001
+fix	walls all wall/gran model hertz tangential history rolling_friction epsd2 mesh n_meshes 2 meshes Wall Blade
+
+# 生成颗粒
+fix	pts all particletemplate/sphere 10487 atom_type 1 density constant ${density} radius constant ${radius}	# 颗粒属性信息
+fix	pdd all particledistribution/discrete 32452867 ${nradii} pts ${frac} #分布
+region fillRegion block -0.07 0.07 -0.07 0.07 -0.05 0.05 units box # 颗粒生成区域
+fix ins all insert/rate/region seed  86028157 distributiontemplate pdd nparticles 6000 particlerate 6000 &
+	insert_every 1000 overlapcheck yes region fillRegion ntry_mc 10000 # 动态颗粒工厂
+
+shell 	mkdir post
+
+# 保存.vtk时间间隔
+variable	dumptime equal 0.02		#每隔0.02秒保存一次数据
+variable	dumpstep equal ${dumptime}/${dt}
+dump	dmpparticle all custom/vtk ${dumpstep} post/particles_*.vtk id type x y z vx vy vz fx fy fz radius mass # 输出颗粒信息
+dump	dmpWall all mesh/gran/VTK ${dumpstep} post/wall*.vtk stress Wall # 输出几何体Wall信息
+dump	dmpBlade all mesh/gran/VTK ${dumpstep} post/blade*.vtk stress Blade # 输出搅拌叶片Blade信息
+
+# 运行计算
+run	${fillsteps} # 填充颗粒时间
+unfix ins
+run	${fillsteps} # 颗粒静置时间
+fix	MoveBlade	all move/mesh mesh Blade rotate origin 0 0 0 axis 0. 0. 1. period  ${drumPeriod} # 设置旋转
+run	 ${rotasteps} # 搅拌叶片旋转时间
